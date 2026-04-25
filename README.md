@@ -58,21 +58,47 @@ Supported algorithms:
 
 - `layered` for directed top-down or left-right graphs
 - `grid` for compact deterministic placement
+- `bfs` for breadth-first multipartite placement from a start node
+- `circular` for NetworkX-style circular placement
 - `radial` for hub-oriented circular placement
 - `force` for a deterministic force-directed pass
+- `forceatlas2` for a ForceAtlas2-inspired force-directed pass
+- `kamada_kawai` for a weighted shortest-path cost-function layout
+
+React Flow edges can include `weight` or `data.weight`; weighted algorithms use
+that numeric value and default missing weights to `1`.
 
 Options use camelCase JSON keys:
 
 ```ts
 type LayoutOptions = {
-  algorithm?: "layered" | "grid" | "radial" | "force";
-  direction?: "DOWN" | "RIGHT" | "LR";
+  algorithm?:
+    | "layered"
+    | "grid"
+    | "bfs"
+    | "circular"
+    | "radial"
+    | "force"
+    | "forceatlas2"
+    | "kamada_kawai";
+  direction?: "DOWN" | "RIGHT" | "LR"; // layered
   spacingX?: number;
   spacingY?: number;
   nodeWidth?: number;
   nodeHeight?: number;
   centerX?: number;
   centerY?: number;
-  iterations?: number;
+  start?: string; // bfs
+  align?: "vertical" | "horizontal"; // bfs
+  scale?: number; // bfs, circular, kamada_kawai
+  iterations?: number; // force, kamada_kawai
+  maxIter?: number; // forceatlas2
+  jitterTolerance?: number; // forceatlas2
+  scalingRatio?: number; // forceatlas2
+  gravity?: number; // forceatlas2
+  distributedAction?: boolean; // forceatlas2
+  strongGravity?: boolean; // forceatlas2
+  linlog?: boolean; // forceatlas2
+  seed?: number; // forceatlas2 initial positions
 };
 ```

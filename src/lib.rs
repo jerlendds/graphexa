@@ -1,12 +1,15 @@
+mod layout;
+
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
-const DEFAULT_NODE_WIDTH: f64 = 180.0;
-const DEFAULT_NODE_HEIGHT: f64 = 72.0;
-const DEFAULT_SPACING_X: f64 = 120.0;
-const DEFAULT_SPACING_Y: f64 = 96.0;
+use layout::{LayoutEdge, LayoutNode, apply_layout};
+
+pub const DEFAULT_NODE_WIDTH: f64 = 180.0;
+pub const DEFAULT_NODE_HEIGHT: f64 = 72.0;
+pub const DEFAULT_SPACING_X: f64 = 120.0;
+pub const DEFAULT_SPACING_Y: f64 = 96.0;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,21 +32,28 @@ pub struct LayoutOptions {
     pub center_y: f64,
     #[serde(default = "default_iterations")]
     pub iterations: usize,
-}
-
-#[derive(Debug, Clone)]
-struct LayoutNode {
-    id: String,
-    width: f64,
-    height: f64,
-    x: f64,
-    y: f64,
-}
-
-#[derive(Debug, Clone)]
-struct LayoutEdge {
-    source: String,
-    target: String,
+    #[serde(default = "default_max_iter")]
+    pub max_iter: usize,
+    #[serde(default = "default_jitter_tolerance")]
+    pub jitter_tolerance: f64,
+    #[serde(default = "default_scaling_ratio")]
+    pub scaling_ratio: f64,
+    #[serde(default = "default_gravity")]
+    pub gravity: f64,
+    #[serde(default)]
+    pub distributed_action: bool,
+    #[serde(default)]
+    pub strong_gravity: bool,
+    #[serde(default)]
+    pub linlog: bool,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default = "default_align")]
+    pub align: String,
+    #[serde(default = "default_scale")]
+    pub scale: f64,
 }
 
 #[wasm_bindgen]
@@ -94,180 +104,6 @@ pub fn layout_react_flow_graph(
     serde_json::to_string(&graph).map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
-fn apply_layout(nodes: &mut [LayoutNode], edges: &[LayoutEdge], options: &LayoutOptions) {
-    match options.algorithm.as_str() {
-        "radial" => radial_layout(nodes, edges, options),
-        "force" => force_layout(nodes, edges, options),
-        "grid" => grid_layout(nodes, options),
-        _ => layered_layout(nodes, edges, options),
-    }
-}
-
-fn layered_layout(nodes: &mut [LayoutNode], edges: &[LayoutEdge], options: &LayoutOptions) {
-    let node_index = index_nodes(nodes);
-    let mut incoming = vec![0usize; nodes.len()];
-    let mut outgoing = vec![Vec::new(); nodes.len()];
-
-    for edge in edges {
-        if let (Some(source), Some(target)) =
-            (node_index.get(&edge.source), node_index.get(&edge.target))
-        {
-            outgoing[*source].push(*target);
-            incoming[*target] += 1;
-        }
-    }
-
-    let mut queue = VecDeque::new();
-    let mut ranks = vec![0usize; nodes.len()];
-
-    for (index, count) in incoming.iter().enumerate() {
-        if *count == 0 {
-            queue.push_back(index);
-        }
-    }
-
-    if queue.is_empty() {
-        for index in 0..nodes.len() {
-            queue.push_back(index);
-        }
-    }
-
-    while let Some(index) = queue.pop_front() {
-        for target in &outgoing[index] {
-            ranks[*target] = ranks[*target].max(ranks[index] + 1);
-            incoming[*target] = incoming[*target].saturating_sub(1);
-            if incoming[*target] == 0 {
-                queue.push_back(*target);
-            }
-        }
-    }
-
-    let mut layers: Vec<Vec<usize>> = Vec::new();
-    for (index, rank) in ranks.iter().enumerate() {
-        if layers.len() <= *rank {
-            layers.resize_with(*rank + 1, Vec::new);
-        }
-        layers[*rank].push(index);
-    }
-
-    for (rank, layer) in layers.iter().enumerate() {
-        for (order, index) in layer.iter().enumerate() {
-            place_layered_node(&mut nodes[*index], rank, order, options);
-        }
-    }
-}
-
-fn grid_layout(nodes: &mut [LayoutNode], options: &LayoutOptions) {
-    if nodes.is_empty() {
-        return;
-    }
-
-    let columns = (nodes.len() as f64).sqrt().ceil() as usize;
-    for (index, node) in nodes.iter_mut().enumerate() {
-        let row = index / columns;
-        let column = index % columns;
-        node.x = column as f64 * (node.width + options.spacing_x);
-        node.y = row as f64 * (node.height + options.spacing_y);
-    }
-}
-
-fn radial_layout(nodes: &mut [LayoutNode], edges: &[LayoutEdge], options: &LayoutOptions) {
-    if nodes.is_empty() {
-        return;
-    }
-
-    let node_index = index_nodes(nodes);
-    let mut degree = vec![0usize; nodes.len()];
-    for edge in edges {
-        if let Some(source) = node_index.get(&edge.source) {
-            degree[*source] += 1;
-        }
-        if let Some(target) = node_index.get(&edge.target) {
-            degree[*target] += 1;
-        }
-    }
-
-    let radius =
-        ((nodes.len() as f64) * (options.node_width + options.spacing_x)) / std::f64::consts::TAU;
-    let mut ordered = (0..nodes.len()).collect::<Vec<_>>();
-    ordered.sort_by_key(|index| std::cmp::Reverse(degree[*index]));
-
-    for (order, index) in ordered.iter().enumerate() {
-        let angle = (order as f64 / nodes.len() as f64) * std::f64::consts::TAU;
-        nodes[*index].x = options.center_x + radius * angle.cos();
-        nodes[*index].y = options.center_y + radius * angle.sin();
-    }
-}
-
-fn force_layout(nodes: &mut [LayoutNode], edges: &[LayoutEdge], options: &LayoutOptions) {
-    radial_layout(nodes, edges, options);
-
-    if nodes.len() < 2 {
-        return;
-    }
-
-    let node_index = index_nodes(nodes);
-    let spring_length = options.node_width + options.spacing_x;
-    let repulsion = spring_length * spring_length;
-    let step = 0.02;
-
-    for _ in 0..options.iterations {
-        let mut delta = vec![(0.0, 0.0); nodes.len()];
-
-        for a in 0..nodes.len() {
-            for b in (a + 1)..nodes.len() {
-                let dx = nodes[a].x - nodes[b].x;
-                let dy = nodes[a].y - nodes[b].y;
-                let distance_sq = (dx * dx + dy * dy).max(0.01);
-                let distance = distance_sq.sqrt();
-                let force = repulsion / distance_sq;
-                let fx = (dx / distance) * force;
-                let fy = (dy / distance) * force;
-                delta[a].0 += fx;
-                delta[a].1 += fy;
-                delta[b].0 -= fx;
-                delta[b].1 -= fy;
-            }
-        }
-
-        for edge in edges {
-            if let (Some(source), Some(target)) =
-                (node_index.get(&edge.source), node_index.get(&edge.target))
-            {
-                let dx = nodes[*target].x - nodes[*source].x;
-                let dy = nodes[*target].y - nodes[*source].y;
-                let distance = (dx * dx + dy * dy).sqrt().max(0.01);
-                let force = (distance - spring_length) * 0.08;
-                let fx = (dx / distance) * force;
-                let fy = (dy / distance) * force;
-                delta[*source].0 += fx;
-                delta[*source].1 += fy;
-                delta[*target].0 -= fx;
-                delta[*target].1 -= fy;
-            }
-        }
-
-        for (index, node) in nodes.iter_mut().enumerate() {
-            node.x += delta[index].0 * step;
-            node.y += delta[index].1 * step;
-        }
-    }
-}
-
-fn place_layered_node(node: &mut LayoutNode, rank: usize, order: usize, options: &LayoutOptions) {
-    let primary = rank as f64;
-    let secondary = order as f64;
-    if options.direction.eq_ignore_ascii_case("RIGHT")
-        || options.direction.eq_ignore_ascii_case("LR")
-    {
-        node.x = primary * (node.width + options.spacing_x);
-        node.y = secondary * (node.height + options.spacing_y);
-    } else {
-        node.x = secondary * (node.width + options.spacing_x);
-        node.y = primary * (node.height + options.spacing_y);
-    }
-}
-
 fn read_nodes(values: &[Value], options: &LayoutOptions) -> Result<Vec<LayoutNode>, JsValue> {
     values
         .iter()
@@ -300,6 +136,9 @@ fn read_edges(values: &[Value]) -> Vec<LayoutEdge> {
             Some(LayoutEdge {
                 source: value.get("source")?.as_str()?.to_owned(),
                 target: value.get("target")?.as_str()?.to_owned(),
+                weight: number_at(value, "weight")
+                    .or_else(|| value.get("data").and_then(|data| number_at(data, "weight")))
+                    .unwrap_or(1.0),
             })
         })
         .collect()
@@ -314,14 +153,6 @@ fn write_positions(values: &mut [Value], layout_nodes: &[LayoutNode]) {
             object.insert("position".to_owned(), Value::Object(position));
         }
     }
-}
-
-fn index_nodes(nodes: &[LayoutNode]) -> HashMap<String, usize> {
-    nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id.clone(), index))
-        .collect()
 }
 
 fn parse_json<T>(source: &str, label: &str) -> Result<T, JsValue>
@@ -345,6 +176,17 @@ fn parse_options(options_json: Option<String>) -> Result<LayoutOptions, JsValue>
             center_x: 0.0,
             center_y: 0.0,
             iterations: default_iterations(),
+            max_iter: default_max_iter(),
+            jitter_tolerance: default_jitter_tolerance(),
+            scaling_ratio: default_scaling_ratio(),
+            gravity: default_gravity(),
+            distributed_action: false,
+            strong_gravity: false,
+            linlog: false,
+            seed: None,
+            start: None,
+            align: default_align(),
+            scale: default_scale(),
         }),
     }
 }
@@ -388,6 +230,30 @@ fn default_node_height() -> f64 {
 
 fn default_iterations() -> usize {
     120
+}
+
+fn default_max_iter() -> usize {
+    100
+}
+
+fn default_jitter_tolerance() -> f64 {
+    1.0
+}
+
+fn default_scaling_ratio() -> f64 {
+    2.0
+}
+
+fn default_gravity() -> f64 {
+    1.0
+}
+
+fn default_align() -> String {
+    "vertical".to_owned()
+}
+
+fn default_scale() -> f64 {
+    1.0
 }
 
 #[cfg(test)]
@@ -437,5 +303,70 @@ mod tests {
             layouted["nodes"][1]["position"]["y"],
             DEFAULT_NODE_HEIGHT + DEFAULT_SPACING_Y
         );
+    }
+
+    #[test]
+    fn bfs_layout_uses_start_node_and_vertical_alignment() {
+        let nodes = r#"[{"id":"0"},{"id":"1"},{"id":"2"},{"id":"3"}]"#;
+        let edges = r#"[{"source":"0","target":"1"},{"source":"1","target":"2"},{"source":"2","target":"3"}]"#;
+        let options = Some(r#"{"algorithm":"bfs","start":"0","scale":1}"#.to_owned());
+        let result = layout_react_flow(nodes, edges, options).unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[0]["position"]["x"], -1.0);
+        assert_eq!(layouted[1]["position"]["x"], -0.33333333333333337);
+        assert_eq!(layouted[2]["position"]["x"], 0.33333333333333326);
+        assert_eq!(layouted[3]["position"]["x"], 1.0);
+        assert_eq!(layouted[3]["position"]["y"], 0.0);
+    }
+
+    #[test]
+    fn circular_layout_places_nodes_on_scaled_circle() {
+        let nodes = r#"[{"id":"a"},{"id":"b"},{"id":"c"},{"id":"d"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            "[]",
+            Some(r#"{"algorithm":"circular","scale":2}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[0]["position"]["x"], 2.0);
+        assert!((layouted[1]["position"]["y"].as_f64().unwrap() - 2.0).abs() < 0.000001);
+        assert!((layouted[2]["position"]["x"].as_f64().unwrap() + 2.0).abs() < 0.000001);
+    }
+
+    #[test]
+    fn forceatlas2_layout_moves_connected_nodes() {
+        let nodes = r#"[{"id":"a"},{"id":"b"},{"id":"c"}]"#;
+        let edges = r#"[{"source":"a","target":"b","weight":2},{"source":"b","target":"c"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"forceatlas2","maxIter":5,"seed":42}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert!(layouted[0]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[1]["position"]["y"].as_f64().unwrap().is_finite());
+        assert_ne!(layouted[0]["position"], layouted[1]["position"]);
+    }
+
+    #[test]
+    fn kamada_kawai_layout_rescales_weighted_path() {
+        let nodes = r#"[{"id":"0"},{"id":"1"},{"id":"2"},{"id":"3"}]"#;
+        let edges = r#"[{"source":"0","target":"1","weight":1},{"source":"1","target":"2","weight":1},{"source":"2","target":"3","weight":1}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"kamada_kawai","iterations":20,"scale":1}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert!(layouted[0]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[3]["position"]["y"].as_f64().unwrap().is_finite());
+        assert_ne!(layouted[0]["position"], layouted[3]["position"]);
     }
 }
