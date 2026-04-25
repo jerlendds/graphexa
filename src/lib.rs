@@ -41,6 +41,12 @@ pub struct LayoutOptions {
     #[serde(default = "default_gravity")]
     pub gravity: f64,
     #[serde(default)]
+    pub k: Option<f64>,
+    #[serde(default = "default_threshold")]
+    pub threshold: f64,
+    #[serde(default = "default_method")]
+    pub method: String,
+    #[serde(default)]
     pub distributed_action: bool,
     #[serde(default)]
     pub strong_gravity: bool,
@@ -48,6 +54,16 @@ pub struct LayoutOptions {
     pub linlog: bool,
     #[serde(default)]
     pub seed: Option<u64>,
+    #[serde(default)]
+    pub nlist: Option<Vec<Vec<String>>>,
+    #[serde(default)]
+    pub rotate: Option<f64>,
+    #[serde(default)]
+    pub subset_key: Option<Value>,
+    #[serde(default = "default_resolution")]
+    pub resolution: f64,
+    #[serde(default)]
+    pub equidistant: bool,
     #[serde(default)]
     pub start: Option<String>,
     #[serde(default = "default_align")]
@@ -73,7 +89,12 @@ pub fn layout_react_flow(
 
     let mut layout_nodes = read_nodes(&node_values, &options)?;
     let layout_edges = read_edges(&edge_values);
-    apply_layout(&mut layout_nodes, &layout_edges, &options);
+    apply_layout(&mut layout_nodes, &layout_edges, &options).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Failed to apply layout algorithm '{}': {error}",
+            options.algorithm
+        ))
+    })?;
     write_positions(&mut node_values, &layout_nodes);
 
     serde_json::to_string(&node_values).map_err(|error| JsValue::from_str(&error.to_string()))
@@ -118,6 +139,7 @@ fn read_nodes(values: &[Value], options: &LayoutOptions) -> Result<Vec<LayoutNod
                 id: id.to_owned(),
                 width: number_at(value, "width").unwrap_or(options.node_width),
                 height: number_at(value, "height").unwrap_or(options.node_height),
+                subset: read_subset(value, options),
                 x: position
                     .and_then(|position| number_at(position, "x"))
                     .unwrap_or(0.0),
@@ -142,6 +164,25 @@ fn read_edges(values: &[Value]) -> Vec<LayoutEdge> {
             })
         })
         .collect()
+}
+
+fn read_subset(value: &Value, options: &LayoutOptions) -> Option<String> {
+    let key = options
+        .subset_key
+        .as_ref()
+        .and_then(Value::as_str)
+        .unwrap_or("subset");
+
+    value
+        .get(key)
+        .or_else(|| value.get("data").and_then(|data| data.get(key)))
+        .and_then(|subset| {
+            subset
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| subset.as_i64().map(|value| value.to_string()))
+                .or_else(|| subset.as_u64().map(|value| value.to_string()))
+        })
 }
 
 fn write_positions(values: &mut [Value], layout_nodes: &[LayoutNode]) {
@@ -180,10 +221,18 @@ fn parse_options(options_json: Option<String>) -> Result<LayoutOptions, JsValue>
             jitter_tolerance: default_jitter_tolerance(),
             scaling_ratio: default_scaling_ratio(),
             gravity: default_gravity(),
+            k: None,
+            threshold: default_threshold(),
+            method: default_method(),
             distributed_action: false,
             strong_gravity: false,
             linlog: false,
             seed: None,
+            nlist: None,
+            rotate: None,
+            subset_key: None,
+            resolution: default_resolution(),
+            equidistant: false,
             start: None,
             align: default_align(),
             scale: default_scale(),
@@ -246,6 +295,18 @@ fn default_scaling_ratio() -> f64 {
 
 fn default_gravity() -> f64 {
     1.0
+}
+
+fn default_threshold() -> f64 {
+    1e-4
+}
+
+fn default_method() -> String {
+    "auto".to_owned()
+}
+
+fn default_resolution() -> f64 {
+    0.35
 }
 
 fn default_align() -> String {
@@ -368,5 +429,79 @@ mod tests {
         assert!(layouted[0]["position"]["x"].as_f64().unwrap().is_finite());
         assert!(layouted[3]["position"]["y"].as_f64().unwrap().is_finite());
         assert_ne!(layouted[0]["position"], layouted[3]["position"]);
+    }
+
+    #[test]
+    fn planar_layout_positions_planar_path() {
+        let nodes = r#"[{"id":"0"},{"id":"1"},{"id":"2"},{"id":"3"}]"#;
+        let edges = r#"[{"source":"0","target":"1"},{"source":"1","target":"2"},{"source":"2","target":"3"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"planar","scale":1}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert!(layouted[0]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[3]["position"]["y"].as_f64().unwrap().is_finite());
+        assert_ne!(layouted[0]["position"], layouted[1]["position"]);
+    }
+
+    #[test]
+    fn planar_layout_rejects_k5() {
+        let nodes = r#"[{"id":"0"},{"id":"1"},{"id":"2"},{"id":"3"},{"id":"4"}]"#;
+        let edges = r#"[
+            {"source":"0","target":"1"},{"source":"0","target":"2"},{"source":"0","target":"3"},{"source":"0","target":"4"},
+            {"source":"1","target":"2"},{"source":"1","target":"3"},{"source":"1","target":"4"},
+            {"source":"2","target":"3"},{"source":"2","target":"4"},
+            {"source":"3","target":"4"}
+        ]"#;
+        let options = parse_options(Some(r#"{"algorithm":"planar"}"#.to_owned())).unwrap();
+        let node_values: Vec<Value> = parse_json(nodes, "nodes").unwrap();
+        let edge_values: Vec<Value> = parse_json(edges, "edges").unwrap();
+        let mut layout_nodes = read_nodes(&node_values, &options).unwrap();
+        let layout_edges = read_edges(&edge_values);
+        let error = apply_layout(&mut layout_nodes, &layout_edges, &options).unwrap_err();
+
+        assert!(error.contains("G is not planar"));
+    }
+
+    #[test]
+    fn additional_layout_algorithms_dispatch() {
+        let nodes = r#"[
+            {"id":"0","data":{"subset":"a"},"position":{"x":0,"y":0}},
+            {"id":"1","data":{"subset":"b"},"position":{"x":10,"y":0}},
+            {"id":"2","data":{"subset":"b"},"position":{"x":20,"y":0}},
+            {"id":"3","data":{"subset":"c"},"position":{"x":30,"y":0}}
+        ]"#;
+        let edges = r#"[{"source":"0","target":"1"},{"source":"1","target":"2"},{"source":"2","target":"3"}]"#;
+        let algorithms = [
+            "random",
+            "rescale",
+            "shell",
+            "spring",
+            "spectral",
+            "spiral",
+            "multipartite",
+        ];
+
+        for algorithm in algorithms {
+            let result = layout_react_flow(
+                nodes,
+                edges,
+                Some(format!(r#"{{"algorithm":"{algorithm}","seed":7}}"#)),
+            )
+            .unwrap();
+            let layouted: Value = serde_json::from_str(&result).unwrap();
+            assert!(
+                layouted[0]["position"]["x"].as_f64().unwrap().is_finite(),
+                "{algorithm} did not produce a finite x position"
+            );
+            assert!(
+                layouted[0]["position"]["y"].as_f64().unwrap().is_finite(),
+                "{algorithm} did not produce a finite y position"
+            );
+        }
     }
 }

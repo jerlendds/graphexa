@@ -64,6 +64,14 @@ Supported algorithms:
 - `force` for a deterministic force-directed pass
 - `forceatlas2` for a ForceAtlas2-inspired force-directed pass
 - `kamada_kawai` for a weighted shortest-path cost-function layout
+- `planar` for planar graph placement with non-planar guard checks
+- `random` for deterministic seeded random placement
+- `rescale` for rescaling existing React Flow positions
+- `shell` for concentric-circle placement
+- `spring` for Fruchterman-Reingold force-directed placement
+- `spectral` for Laplacian eigenvector placement
+- `spiral` for compact spiral placement
+- `multipartite` for straight-line layered subset placement
 
 React Flow edges can include `weight` or `data.weight`; weighted algorithms use
 that numeric value and default missing weights to `1`.
@@ -80,7 +88,15 @@ type LayoutOptions = {
     | "radial"
     | "force"
     | "forceatlas2"
-    | "kamada_kawai";
+    | "kamada_kawai"
+    | "planar"
+    | "random"
+    | "rescale"
+    | "shell"
+    | "spring"
+    | "spectral"
+    | "spiral"
+    | "multipartite";
   direction?: "DOWN" | "RIGHT" | "LR"; // layered
   spacingX?: number;
   spacingY?: number;
@@ -89,16 +105,24 @@ type LayoutOptions = {
   centerX?: number;
   centerY?: number;
   start?: string; // bfs
-  align?: "vertical" | "horizontal"; // bfs
-  scale?: number; // bfs, circular, kamada_kawai
-  iterations?: number; // force, kamada_kawai
+  align?: "vertical" | "horizontal"; // bfs, multipartite
+  scale?: number; // bfs, circular, kamada_kawai, planar, rescale, shell, spring, spectral, spiral
+  iterations?: number; // force, kamada_kawai, spring
+  k?: number; // spring
+  threshold?: number; // spring
+  method?: "auto" | "force" | "energy"; // spring
   maxIter?: number; // forceatlas2
   jitterTolerance?: number; // forceatlas2
   scalingRatio?: number; // forceatlas2
-  gravity?: number; // forceatlas2
+  gravity?: number; // forceatlas2, spring energy mode
   distributedAction?: boolean; // forceatlas2
   strongGravity?: boolean; // forceatlas2
   linlog?: boolean; // forceatlas2
-  seed?: number; // forceatlas2 initial positions
+  seed?: number; // forceatlas2, random, spring initial positions
+  nlist?: string[][]; // shell
+  rotate?: number; // shell
+  subsetKey?: string | Record<string, string[]>; // multipartite
+  resolution?: number; // spiral
+  equidistant?: boolean; // spiral
 };
 ```
