@@ -72,6 +72,12 @@ Supported algorithms:
 - `spectral` for Laplacian eigenvector placement
 - `spiral` for compact spiral placement
 - `multipartite` for straight-line layered subset placement
+- `investigation_hierarchy` for Maltego-style tree-like investigative graphs
+- `investigation_organic` for Maltego-style dense-network clustering
+- `investigation_hub_rings` for Maltego-style hub-first circular rings
+- `investigation_orthogonal` for Maltego-style structured right-angle grids
+- `transform_incremental` for preserving positioned nodes while relaxing newly returned transform nodes
+- `transform_locked` for keeping positioned nodes fixed while placing newly returned transform nodes
 
 React Flow edges can include `weight` or `data.weight`; weighted algorithms use
 that numeric value and default missing weights to `1`.
@@ -96,7 +102,13 @@ type LayoutOptions = {
     | "spring"
     | "spectral"
     | "spiral"
-    | "multipartite";
+    | "multipartite"
+    | "investigation_hierarchy"
+    | "investigation_organic"
+    | "investigation_hub_rings"
+    | "investigation_orthogonal"
+    | "transform_incremental"
+    | "transform_locked";
   direction?: "DOWN" | "RIGHT" | "LR"; // layered
   spacingX?: number;
   spacingY?: number;

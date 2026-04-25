@@ -146,6 +146,7 @@ fn read_nodes(values: &[Value], options: &LayoutOptions) -> Result<Vec<LayoutNod
                 y: position
                     .and_then(|position| number_at(position, "y"))
                     .unwrap_or(0.0),
+                has_position: position.is_some(),
             })
         })
         .collect()
@@ -484,6 +485,10 @@ mod tests {
             "spectral",
             "spiral",
             "multipartite",
+            "investigation_hierarchy",
+            "investigation_hub_rings",
+            "investigation_organic",
+            "investigation_orthogonal",
         ];
 
         for algorithm in algorithms {
@@ -503,5 +508,250 @@ mod tests {
                 "{algorithm} did not produce a finite y position"
             );
         }
+    }
+
+    #[test]
+    fn transform_locked_keeps_existing_positions_and_places_new_nodes() {
+        let nodes = r#"[
+            {"id":"a","position":{"x":100,"y":200}},
+            {"id":"b"},
+            {"id":"c","position":{"x":400,"y":200}}
+        ]"#;
+        let edges = r#"[{"source":"a","target":"b"},{"source":"b","target":"c"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"transform_locked"}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[0]["position"]["x"], 100.0);
+        assert_eq!(layouted[0]["position"]["y"], 200.0);
+        assert_eq!(layouted[2]["position"]["x"], 400.0);
+        assert_ne!(layouted[1]["position"]["x"], 0.0);
+    }
+
+    #[test]
+    fn transform_locked_wraps_long_anchor_rows_after_ten_nodes() {
+        let nodes = r#"[
+            {"id":"anchor","width":100,"height":40,"position":{"x":10,"y":20}},
+            {"id":"n1","width":160,"height":60},{"id":"n2","width":160,"height":60},
+            {"id":"n3","width":160,"height":60},{"id":"n4","width":160,"height":60},
+            {"id":"n5","width":160,"height":60},{"id":"n6","width":160,"height":60},
+            {"id":"n7","width":160,"height":60},{"id":"n8","width":160,"height":60},
+            {"id":"n9","width":160,"height":60},{"id":"n10","width":160,"height":60}
+        ]"#;
+        let edges = r#"[
+            {"source":"anchor","target":"n1"},
+            {"source":"anchor","target":"n2"},
+            {"source":"anchor","target":"n3"},
+            {"source":"anchor","target":"n4"},
+            {"source":"anchor","target":"n5"},
+            {"source":"anchor","target":"n6"},
+            {"source":"anchor","target":"n7"},
+            {"source":"anchor","target":"n8"},
+            {"source":"anchor","target":"n9"},
+            {"source":"anchor","target":"n10"}
+        ]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(
+                r#"{"algorithm":"transform_locked","nodeWidth":100,"nodeHeight":40,"spacingX":20,"spacingY":30}"#
+                    .to_owned(),
+            ),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[1]["position"]["x"], 130.0);
+        assert_eq!(layouted[1]["position"]["y"], 20.0);
+        assert_eq!(layouted[5]["position"]["x"], 850.0);
+        assert_eq!(layouted[5]["position"]["y"], 20.0);
+        assert_eq!(layouted[6]["position"]["x"], 130.0);
+        assert_eq!(layouted[6]["position"]["y"], 110.0);
+        assert_eq!(layouted[10]["position"]["x"], 850.0);
+        assert_eq!(layouted[10]["position"]["y"], 110.0);
+    }
+
+    #[test]
+    fn transform_incremental_relaxes_only_new_nodes() {
+        let nodes = r#"[
+            {"id":"a","position":{"x":0,"y":0}},
+            {"id":"b"},
+            {"id":"c","position":{"x":320,"y":0}}
+        ]"#;
+        let edges = r#"[{"source":"a","target":"b"},{"source":"b","target":"c"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"transform_incremental","iterations":4}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[0]["position"]["x"], 0.0);
+        assert_eq!(layouted[0]["position"]["y"], 0.0);
+        assert_eq!(layouted[2]["position"]["x"], 320.0);
+        assert!(layouted[1]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[1]["position"]["y"].as_f64().unwrap().is_finite());
+    }
+
+    #[test]
+    fn transform_incremental_preserves_existing_positions_and_places_new_entities() {
+        let nodes = r#"[
+            {"id":"existing-a","position":{"x":25,"y":50}},
+            {"id":"new-a"},
+            {"id":"existing-b","position":{"x":425,"y":50}},
+            {"id":"new-b"}
+        ]"#;
+        let edges = r#"[
+            {"source":"existing-a","target":"new-a"},
+            {"source":"new-a","target":"existing-b"},
+            {"source":"existing-b","target":"new-b"}
+        ]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(r#"{"algorithm":"transform_incremental","iterations":4}"#.to_owned()),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[0]["position"]["x"], 25.0);
+        assert_eq!(layouted[0]["position"]["y"], 50.0);
+        assert_eq!(layouted[2]["position"]["x"], 425.0);
+        assert_eq!(layouted[2]["position"]["y"], 50.0);
+        assert!(layouted[1]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[1]["position"]["y"].as_f64().unwrap().is_finite());
+        assert!(layouted[3]["position"]["x"].as_f64().unwrap().is_finite());
+        assert!(layouted[3]["position"]["y"].as_f64().unwrap().is_finite());
+    }
+
+    #[test]
+    fn transform_incremental_wraps_long_anchor_rows_and_uses_entity_bounds() {
+        let nodes = r#"[
+            {"id":"anchor","width":110,"height":44,"position":{"x":15,"y":25}},
+            {"id":"n1","width":190,"height":74},{"id":"n2","width":190,"height":74},
+            {"id":"n3","width":190,"height":74},{"id":"n4","width":190,"height":74},
+            {"id":"n5","width":190,"height":74},{"id":"n6","width":190,"height":74},
+            {"id":"n7","width":190,"height":74},{"id":"n8","width":190,"height":74},
+            {"id":"n9","width":190,"height":74},{"id":"n10","width":190,"height":74}
+        ]"#;
+        let edges = r#"[
+            {"source":"anchor","target":"n1"},
+            {"source":"anchor","target":"n2"},
+            {"source":"anchor","target":"n3"},
+            {"source":"anchor","target":"n4"},
+            {"source":"anchor","target":"n5"},
+            {"source":"anchor","target":"n6"},
+            {"source":"anchor","target":"n7"},
+            {"source":"anchor","target":"n8"},
+            {"source":"anchor","target":"n9"},
+            {"source":"anchor","target":"n10"}
+        ]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(
+                r#"{"algorithm":"transform_incremental","iterations":0,"nodeWidth":100,"nodeHeight":40,"spacingX":20,"spacingY":30}"#
+                    .to_owned(),
+            ),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[1]["position"]["x"], 145.0);
+        assert_eq!(layouted[5]["position"]["x"], 985.0);
+        assert_eq!(layouted[6]["position"]["x"], 145.0);
+        assert_eq!(layouted[6]["position"]["y"], 129.0);
+
+        for a in 1..layouted.as_array().unwrap().len() {
+            for b in (a + 1)..layouted.as_array().unwrap().len() {
+                assert!(
+                    !bounds_overlap(&layouted[a], &layouted[b]),
+                    "nodes {a} and {b} overlap"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transform_incremental_avoids_existing_entity_bounds() {
+        let nodes = r#"[
+            {"id":"anchor","width":100,"height":40,"position":{"x":0,"y":0}},
+            {"id":"occupied","width":220,"height":100,"position":{"x":120,"y":0}},
+            {"id":"new","width":220,"height":100}
+        ]"#;
+        let edges = r#"[{"source":"anchor","target":"new"}]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(
+                r#"{"algorithm":"transform_incremental","iterations":0,"nodeWidth":100,"nodeHeight":40,"spacingX":20,"spacingY":30}"#
+                    .to_owned(),
+            ),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(layouted[2]["position"]["x"], 120.0);
+        assert!(
+            layouted[2]["position"]["y"].as_f64().unwrap()
+                >= layouted[1]["position"]["y"].as_f64().unwrap()
+                    + layouted[1]["height"].as_f64().unwrap()
+                    + 30.0
+        );
+        assert!(!bounds_overlap(&layouted[1], &layouted[2]));
+    }
+
+    #[test]
+    fn transform_incremental_separates_overlapping_entity_bounds() {
+        let nodes = r#"[
+            {"id":"anchor","width":180,"height":72,"position":{"x":0,"y":0}},
+            {"id":"a","width":260,"height":120},
+            {"id":"b","width":260,"height":120},
+            {"id":"c","width":260,"height":120},
+            {"id":"d","width":260,"height":120}
+        ]"#;
+        let edges = r#"[
+            {"source":"anchor","target":"a"},
+            {"source":"anchor","target":"b"},
+            {"source":"anchor","target":"c"},
+            {"source":"anchor","target":"d"}
+        ]"#;
+        let result = layout_react_flow(
+            nodes,
+            edges,
+            Some(
+                r#"{"algorithm":"transform_incremental","iterations":8,"spacingX":120,"spacingY":96}"#
+                    .to_owned(),
+            ),
+        )
+        .unwrap();
+        let layouted: Value = serde_json::from_str(&result).unwrap();
+
+        for a in 0..layouted.as_array().unwrap().len() {
+            for b in (a + 1)..layouted.as_array().unwrap().len() {
+                assert!(
+                    !bounds_overlap(&layouted[a], &layouted[b]),
+                    "nodes {a} and {b} overlap"
+                );
+            }
+        }
+    }
+
+    fn bounds_overlap(a: &Value, b: &Value) -> bool {
+        let ax = a["position"]["x"].as_f64().unwrap();
+        let ay = a["position"]["y"].as_f64().unwrap();
+        let aw = a["width"].as_f64().unwrap_or(DEFAULT_NODE_WIDTH);
+        let ah = a["height"].as_f64().unwrap_or(DEFAULT_NODE_HEIGHT);
+        let bx = b["position"]["x"].as_f64().unwrap();
+        let by = b["position"]["y"].as_f64().unwrap();
+        let bw = b["width"].as_f64().unwrap_or(DEFAULT_NODE_WIDTH);
+        let bh = b["height"].as_f64().unwrap_or(DEFAULT_NODE_HEIGHT);
+
+        ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
     }
 }
