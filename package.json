@@ -1,0 +1,12 @@
+{
+  "name": "graphexa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir pkg",
+    "check": "cargo test && wasm-pack build --target web --out-dir pkg --dev",
+    "typecheck": "tsc --noEmit --allowJs false --checkJs false --target ES2020 --module ESNext --moduleResolution bundler pkg/graphexa.d.ts"
+  },
+  "devDependencies": {}
+}
